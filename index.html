@@ -2434,11 +2434,8 @@ function DriveScanTab() {
         pageToken = data.nextPageToken || '';
       } while (pageToken);
       setSharedDrives(drives);
-      // Se ainda não tiver um drive escolhido, tenta achar automaticamente o "Stevens" pra já vir selecionado.
-      if (!config.sharedDriveId) {
-        const stevens = drives.find((d) => /stevens/i.test(d.name || ''));
-        if (stevens) setConfig((c) => ({ ...c, sharedDriveId: stevens.id }));
-      }
+      // (Removido o auto-select fixo do drive "Stevens" que veio junto na cópia do código —
+      // aqui cada empresa escolhe o próprio drive manualmente, sem viés pra nenhum nome específico.)
     } catch (e) {
       // silencioso — usuário ainda pode colar o ID do drive manualmente
     } finally {
