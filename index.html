@@ -2481,26 +2481,30 @@ function DriveScanTab() {
     const ids = [rootId];
     let queue = [rootId];
     let safety = 0;
+    const CHUNK = 12; // mesmo motivo do lote na busca de arquivos: URL curta = conexão confiável
     while (queue.length > 0 && ids.length < 200 && safety < 50) {
       safety++;
-      const batch = queue.splice(0, queue.length);
-      const orClause = batch.map((id) => `'${id}' in parents`).join(' or ');
-      let pageToken = '';
-      do {
-        const params = new URLSearchParams({
-          q: `mimeType = 'application/vnd.google-apps.folder' and trashed = false and (${orClause})`,
-          pageSize: '200',
-          fields: 'nextPageToken, files(id)',
-          includeItemsFromAllDrives: 'true',
-          supportsAllDrives: 'true',
-          corpora: 'allDrives',
-        });
-        if (pageToken) params.set('pageToken', pageToken);
-        const resp = await driveFetch(`https://www.googleapis.com/drive/v3/files?${params.toString()}`);
-        const data = await resp.json();
-        (data.files || []).forEach((f) => { if (!ids.includes(f.id)) { ids.push(f.id); queue.push(f.id); } });
-        pageToken = data.nextPageToken || '';
-      } while (pageToken);
+      const level = queue.splice(0, queue.length);
+      for (let i = 0; i < level.length; i += CHUNK) {
+        const batch = level.slice(i, i + CHUNK);
+        const orClause = batch.map((id) => `'${id}' in parents`).join(' or ');
+        let pageToken = '';
+        do {
+          const params = new URLSearchParams({
+            q: `mimeType = 'application/vnd.google-apps.folder' and trashed = false and (${orClause})`,
+            pageSize: '200',
+            fields: 'nextPageToken, files(id)',
+            includeItemsFromAllDrives: 'true',
+            supportsAllDrives: 'true',
+            corpora: 'allDrives',
+          });
+          if (pageToken) params.set('pageToken', pageToken);
+          const resp = await driveFetch(`https://www.googleapis.com/drive/v3/files?${params.toString()}`);
+          const data = await resp.json();
+          (data.files || []).forEach((f) => { if (!ids.includes(f.id)) { ids.push(f.id); queue.push(f.id); } });
+          pageToken = data.nextPageToken || '';
+        } while (pageToken);
+      }
     }
     return ids;
   };
@@ -2527,43 +2531,59 @@ function DriveScanTab() {
 
       // Não exige mais "fullText contains END INVOICE" — se exigisse, arquivos que nunca tiveram
       // nenhum marcador (e por isso dependem do fallback por data) nem apareceriam na varredura.
-      let q = `name contains 'PRODUCTION' and trashed = false and mimeType != 'application/vnd.google-apps.folder'`;
-      if (folderIds && folderIds.length > 0) {
-        const orClause = folderIds.map((id) => `'${id}' in parents`).join(' or ');
-        q += ` and (${orClause})`;
-      }
+      const qBase = `name contains 'PRODUCTION' and trashed = false and mimeType != 'application/vnd.google-apps.folder'`;
+      let qDateFilter = '';
       if (Number(days) > 0) {
         const cutoff = new Date(Date.now() - Number(days) * 24 * 60 * 60 * 1000).toISOString();
-        q += ` and modifiedTime > '${cutoff}'`;
+        qDateFilter = ` and modifiedTime > '${cutoff}'`;
       }
 
+      // Busca os arquivos que batem com "q" (paginando até acabar) — função auxiliar reaproveitada
+      // tanto pro caso normal quanto pro caso com restrição de pasta (em lotes, ver abaixo).
+      const searchFiles = async (q, corporaParams) => {
+        let found = [];
+        let pageToken = '';
+        do {
+          const params = new URLSearchParams({
+            q,
+            pageSize: '100',
+            fields: 'nextPageToken, files(id, name, modifiedTime, webViewLink, size, driveId)',
+            orderBy: 'modifiedTime desc',
+            includeItemsFromAllDrives: 'true',
+            supportsAllDrives: 'true',
+            ...corporaParams,
+          });
+          if (pageToken) params.set('pageToken', pageToken);
+          const resp = await driveFetch(`https://www.googleapis.com/drive/v3/files?${params.toString()}`);
+          const data = await resp.json();
+          found = found.concat(data.files || []);
+          pageToken = data.nextPageToken || '';
+        } while (pageToken);
+        return found;
+      };
+
       let files = [];
-      let pageToken = '';
-      do {
-        const params = new URLSearchParams({
-          q,
-          pageSize: '100',
-          fields: 'nextPageToken, files(id, name, modifiedTime, webViewLink, size, driveId)',
-          orderBy: 'modifiedTime desc',
-          includeItemsFromAllDrives: 'true',
-          supportsAllDrives: 'true',
-        });
-        // Restrição por pasta comum tem prioridade sobre a restrição por Drive Compartilhado —
-        // nesse caso usamos corpora=allDrives (o filtro real já está na query, via "in parents").
-        if (folderIds && folderIds.length > 0) {
-          params.set('corpora', 'allDrives');
-        } else if (config.sharedDriveId) {
-          params.set('corpora', 'drive');
-          params.set('driveId', config.sharedDriveId);
-        } else {
-          params.set('corpora', 'allDrives');
+      if (folderIds && folderIds.length > 0) {
+        // Quebra em lotes pequenos de pastas por consulta — juntar centenas de IDs numa cláusula
+        // "OR" só numa query deixa a URL gigante e o Google recusa a conexão (aparecia como
+        // "Failed to fetch", sem detalhe nenhum). Em lotes, cada requisição fica curta e segura.
+        const CHUNK = 12;
+        const seen = new Map();
+        for (let i = 0; i < folderIds.length; i += CHUNK) {
+          const chunk = folderIds.slice(i, i + CHUNK);
+          const orClause = chunk.map((id) => `'${id}' in parents`).join(' or ');
+          const q = `${qBase} and (${orClause})${qDateFilter}`;
+          const found = await searchFiles(q, { corpora: 'allDrives' });
+          found.forEach((f) => seen.set(f.id, f));
         }
-        if (pageToken) params.set('pageToken', pageToken);
-        const resp = await driveFetch(`https://www.googleapis.com/drive/v3/files?${params.toString()}`);
-        const data = await resp.json();
-        files = files.concat(data.files || []);
-        pageToken = data.nextPageToken || '';
-      } while (pageToken);
+        files = Array.from(seen.values());
+      } else {
+        const q = `${qBase}${qDateFilter}`;
+        const corporaParams = config.sharedDriveId
+          ? { corpora: 'drive', driveId: config.sharedDriveId }
+          : { corpora: 'allDrives' };
+        files = await searchFiles(q, corporaParams);
+      }
 
       setProgress({ done: 0, total: files.length });
 
