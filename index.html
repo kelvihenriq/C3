@@ -696,6 +696,16 @@ function migrateProductionCodes(list) {
   return changed ? next : list;
 }
 
+// Converte o valor de um código (ex: "48") pra número de verdade antes de escrever na planilha
+// exportada. Se ficasse como texto (string), o Excel/Sheets mostra o número certinho na célula
+// mas o SOMA() daquela coluna sempre dá 0 — porque SOMA ignora células de texto, mesmo que
+// pareçam números. Valores vazios ou não-numéricos continuam como estão (texto normal).
+function toNumOrBlank(v) {
+  if (v === undefined || v === null || v === '') return '';
+  const n = Number(v);
+  return Number.isFinite(n) ? n : v;
+}
+
 function computeAsbuiltFormat(codes = {}, fields = CODE_FIELDS) {
   const parts = [];
   fields.forEach(field => {
@@ -4230,7 +4240,6 @@ function ProductionDashboard() {
     // ----- LINHA 1: TOTAIS -----
     const totalsRowData = new Array(totalCols).fill('');
     totalsRowData[0] = `TOTAIS ${selectedMapProd === "ALL" ? "(TODOS OS MAPAS)" : `(MAPA ${selectedMapProd})`} -->`;
-    allCodeFields.forEach((f, i) => { totalsRowData[nMain + i] = codeTotals[f.id] || 0; });
     totalsRowData[totalCols - 1] = 'AUTOMÁTICO';
     ws.getRow(1).values = totalsRowData;
     ws.mergeCells(1, 1, 1, nMain);
@@ -4244,12 +4253,22 @@ function ProductionDashboard() {
       ws.getRow(3 + idx).values = [
         item.daily || '', item.pendings || '', item.date || '', item.map || '', item.location || '',
         item.splice || '', item.name || '', item.type || '', item.typeEnd || '',
-        ...allCodeFields.map((f) => item.codes?.[f.id] || ''),
+        ...allCodeFields.map((f) => toNumOrBlank(item.codes?.[f.id])),
         asbuiltText
       ];
     });
 
     const lastDataRow = 2 + filteredProduction.length;
+
+    // Preenche a linha de TOTAIS com fórmulas de SOMA de verdade (não números fixos) — assim,
+    // se alguém editar um valor de código depois de exportado, o total no topo recalcula
+    // sozinho, em vez de ficar desatualizado igual ficava antes.
+    allCodeFields.forEach((f, i) => {
+      const col = nMain + 1 + i;
+      const colL = colLetter(col);
+      const cell = ws.getRow(1).getCell(col);
+      cell.value = { formula: `SUM(${colL}3:${colL}${lastDataRow})`, result: codeTotals[f.id] || 0 };
+    });
 
     // ----- CORES -----
     const mainHeaderFill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1B5E20' } };
@@ -4437,7 +4456,7 @@ function ProductionDashboard() {
       row.getCell(5).value = item.name || '';
       row.getCell(6).value = item.type || '';
       row.getCell(7).value = item.typeEnd || '';
-      allCodeFields.forEach((f, i) => { row.getCell(nMain + 1 + i).value = item.codes?.[f.id] || ''; });
+      allCodeFields.forEach((f, i) => { row.getCell(nMain + 1 + i).value = toNumOrBlank(item.codes?.[f.id]); });
       row.height = 15.75;
     });
 
@@ -4476,9 +4495,14 @@ function ProductionDashboard() {
     ws.getRow(miniStartRow + 2).getCell(miniStartCol - 1).value = 'PRICE';
 
     invoiceRows.forEach((r, i) => {
-      const totalCell = ws.getRow(miniStartRow + 1).getCell(miniStartCol + i);
-      totalCell.value = r.total;
-      const priceCell = ws.getRow(miniStartRow + 2).getCell(miniStartCol + i);
+      const col = miniStartCol + i;
+      const totalCell = ws.getRow(miniStartRow + 1).getCell(col);
+      // Fórmula de verdade (=SOMA), não um número fixo — assim, se alguém editar um valor na
+      // planilha depois de exportada, o TOTAL recalcula sozinho em vez de ficar desatualizado.
+      // "result" é só o valor em cache pra já aparecer certo antes do Excel recalcular sozinho.
+      const colL = colLetter(col);
+      totalCell.value = { formula: `SUM(${colL}9:${colL}${lastDataRow})`, result: r.total };
+      const priceCell = ws.getRow(miniStartRow + 2).getCell(col);
       priceCell.value = r.price;
       priceCell.numFmt = '"$" #,##0.00';
       totalCell.fill = miniTotalFill;
@@ -4506,8 +4530,11 @@ function ProductionDashboard() {
     const codeCol = totalCols - 1;      // coluna de rótulos (código) logo à esquerda
     invoiceRows.forEach((r, idx) => {
       const row = ws.getRow(vStartRow + idx);
+      const totalMiniCol = colLetter(miniStartCol + idx);
       row.getCell(codeCol).value = r.label;
-      row.getCell(valueCol).value = r.subtotal;
+      // Fórmula: TOTAL (linha do mini-quadro acima) × PRICE (linha logo abaixo dele) — em vez de
+      // um número já calculado, assim ela acompanha se o TOTAL ou o PRICE mudarem depois.
+      row.getCell(valueCol).value = { formula: `${totalMiniCol}${miniStartRow + 1}*${totalMiniCol}${miniStartRow + 2}`, result: r.subtotal };
       row.getCell(codeCol).fill = miniTotalFill;
       row.getCell(valueCol).fill = miniTotalFill;
       row.getCell(codeCol).font = { name: 'Times New Roman', bold: true };
@@ -4521,7 +4548,12 @@ function ProductionDashboard() {
 
     const subtotalRow = vStartRow + invoiceRows.length + 2;
     ws.getRow(subtotalRow).getCell(codeCol).value = 'TOTAL';
-    ws.getRow(subtotalRow).getCell(valueCol).value = invoiceGrandTotal;
+    // Soma de verdade da coluna de subtotais logo acima — não um número fixo.
+    const valueColL = colLetter(valueCol);
+    ws.getRow(subtotalRow).getCell(valueCol).value = {
+      formula: `SUM(${valueColL}${vStartRow}:${valueColL}${vStartRow + invoiceRows.length - 1})`,
+      result: invoiceGrandTotal,
+    };
     ws.getRow(subtotalRow).getCell(codeCol).fill = navyFill;
     ws.getRow(subtotalRow).getCell(valueCol).fill = navyFill;
     ws.getRow(subtotalRow).getCell(codeCol).font = { name: 'Times New Roman', bold: true, color: { argb: 'FFFFFFFF' }, size: 16 };
