@@ -4368,13 +4368,14 @@ function ProductionDashboard() {
       while (n > 0) { const m = (n - 1) % 26; s = String.fromCharCode(65 + m) + s; n = Math.floor((n - 1) / 26); }
       return s;
     };
-    // Data no padrão DD-MM-AA usado no modelo (ex: 08-04-26 = 08/abril/2026)
-    const toDDMMYY = (isoDate) => {
+    // Data no padrão americano MM-DD-AA usado no modelo (ex: 08-04-26 = 04/agosto/2026) —
+    // é o formato que eles usam, não o brasileiro DD-MM-AA.
+    const toUSDate = (isoDate) => {
       if (!isoDate) return '';
       const parts = isoDate.split('-');
       if (parts.length !== 3) return isoDate;
       const [y, m, d] = parts;
-      return `${d}-${m}-${y.slice(-2)}`;
+      return `${m}-${d}-${y.slice(-2)}`;
     };
 
     const wb = new window.ExcelJS.Workbook();
@@ -4409,11 +4410,11 @@ function ProductionDashboard() {
 
     // ----- LINHA 7: TÍTULO "N: 0000 / DAY: ..." — usa o período selecionado na Lista de Produção -----
     const dayLabel = (() => {
-      if (rangeFrom && rangeTo) return rangeFrom === rangeTo ? toDDMMYY(rangeFrom) : `${toDDMMYY(rangeFrom)} A ${toDDMMYY(rangeTo)}`;
-      if (rangeFrom) return toDDMMYY(rangeFrom);
-      if (rangeTo) return toDDMMYY(rangeTo);
+      if (rangeFrom && rangeTo) return rangeFrom === rangeTo ? toUSDate(rangeFrom) : `${toUSDate(rangeFrom)} A ${toUSDate(rangeTo)}`;
+      if (rangeFrom) return toUSDate(rangeFrom);
+      if (rangeTo) return toUSDate(rangeTo);
       const dates = invoiceSourceRows.map((r) => r.date).filter(Boolean).sort();
-      return toDDMMYY(dates.length ? dates[dates.length - 1] : new Date().toISOString().slice(0, 10));
+      return toUSDate(dates.length ? dates[dates.length - 1] : new Date().toISOString().slice(0, 10));
     })();
     ws.mergeCells(7, 1, 7, totalCols);
     const titleCell = ws.getRow(7).getCell(1);
@@ -4446,7 +4447,7 @@ function ProductionDashboard() {
       const isoDate = normDateForCompare(item.date);
       if (isoDate && /^\d{4}-\d{2}-\d{2}$/.test(isoDate)) {
         dateCell.value = new Date(`${isoDate}T00:00:00`);
-        dateCell.numFmt = 'dd/mm/yy';
+        dateCell.numFmt = 'mm/dd/yy'; // formato americano, igual à planilha original deles
       } else {
         dateCell.value = item.date || '';
       }
