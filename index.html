@@ -2846,7 +2846,11 @@ function WhatsAppTab({ productionList }) {
   const [scanAt, setScanAt] = useState(0);
 
   // Comandos para o programa (ele lê a cada ~5s): 'scan' = atualizar agora · 'relink' = reconectar do zero (QR novo + histórico)
-  const sendCommand = (action) => sb.from(APP_STATE_TABLE).upsert({ key: 'whatsapp_command', value: { id: Date.now(), action }, updated_at: new Date().toISOString() });
+  const sendCommand = async (action) => {
+    const { error } = await sb.from(APP_STATE_TABLE).upsert({ key: 'whatsapp_command', value: { id: Date.now(), action }, updated_at: new Date().toISOString() });
+    if (error) { console.error('[WhatsApp] falha ao enviar comando', error); window.alert('Não consegui enviar o comando ao scanner.\n\nErro do Supabase: ' + (error.message || JSON.stringify(error))); }
+    return !error;
+  };
   const scanNow = () => { setScanAt(Date.now()); sendCommand('scan'); };
   const relink = () => {
     if (window.confirm('Reconectar do zero?\n\nO programa vai desconectar este aparelho do seu WhatsApp e mostrar um QR code novo aqui. Depois de ler o QR, o WhatsApp reenvia o histórico recente dos grupos.\n\nUse só quando precisar buscar mensagens antigas.')) sendCommand('relink');
@@ -2861,7 +2865,9 @@ function WhatsAppTab({ productionList }) {
   const saveMonitored = (ids) => {
     const value = { monitored: Array.from(ids) };
     setConfig(value);
-    sb.from(APP_STATE_TABLE).upsert({ key: 'whatsapp_config', value, updated_at: new Date().toISOString() });
+    sb.from(APP_STATE_TABLE).upsert({ key: 'whatsapp_config', value, updated_at: new Date().toISOString() }).then(({ error }) => {
+      if (error) { console.error('[WhatsApp] falha ao salvar grupos marcados', error); window.alert('Não consegui salvar os grupos marcados.\n\nErro do Supabase: ' + (error.message || JSON.stringify(error))); }
+    });
   };
   const toggle = (id) => { const next = new Set(monitored); next.has(id) ? next.delete(id) : next.add(id); saveMonitored(next); };
 
