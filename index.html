@@ -2838,6 +2838,9 @@ function WhatsAppTab({ productionList }) {
   const [groupsData] = useRemoteKey('whatsapp_groups');
   const [activity] = useRemoteKey('whatsapp_activity');
   const [config, setConfig] = useRemoteKey('whatsapp_config');
+  const [mapOverrides, setMapOverrides] = useRemoteKey('whatsapp_maps'); // { [idDoGrupo]: "nome certo do mapa" } — escolhido à mão
+  const [editId, setEditId] = useState(null);
+  const [editText, setEditText] = useState('');
   const [mode, setMode] = useState('WEEK'); // WEEK = sáb–sex | DAY
   const [anchor, setAnchor] = useState(() => waIso(new Date()));
   const [search, setSearch] = useState('');
@@ -2867,6 +2870,17 @@ function WhatsAppTab({ productionList }) {
     setConfig(value);
     sb.from(APP_STATE_TABLE).upsert({ key: 'whatsapp_config', value, updated_at: new Date().toISOString() }).then(({ error }) => {
       if (error) { console.error('[WhatsApp] falha ao salvar grupos marcados', error); window.alert('Não consegui salvar os grupos marcados.\n\nErro do Supabase: ' + (error.message || JSON.stringify(error))); }
+    });
+  };
+  const saveMapName = (id, text) => {
+    const clean = String(text || '').trim();
+    const next = { ...(mapOverrides || {}) };
+    if (clean) next[id] = clean; else delete next[id];
+    setEditId(null);
+    if ((mapOverrides || {})[id] === next[id]) return;
+    setMapOverrides(next);
+    sb.from(APP_STATE_TABLE).upsert({ key: 'whatsapp_maps', value: next, updated_at: new Date().toISOString() }).then(({ error }) => {
+      if (error) { console.error('[WhatsApp] falha ao salvar nome do mapa', error); window.alert('Não consegui salvar o nome do mapa.\n\nErro do Supabase: ' + (error.message || JSON.stringify(error))); }
     });
   };
   const toggle = (id) => { const next = new Set(monitored); next.has(id) ? next.delete(id) : next.add(id); saveMonitored(next); };
@@ -2908,7 +2922,15 @@ function WhatsAppTab({ productionList }) {
     Object.entries(activity?.groups || {}).forEach(([id, g]) => { if (!names[id]) names[id] = g.name; });
     return Object.entries(names).map(([id, name]) => {
       const gk = compact(name);
-      const matched = mapInfo.filter((m) => hasMapKey(gk, m.key));
+      const ov = (mapOverrides && mapOverrides[id]) || '';
+      let matched;
+      if (ov) {
+        const ok = compact(ov);
+        matched = mapInfo.filter((m) => m.key === ok);
+        if (!matched.length) matched = mapInfo.filter((m) => hasMapKey(ok, m.key));
+      } else {
+        matched = mapInfo.filter((m) => hasMapKey(gk, m.key));
+      }
       const lines = matched.flatMap((m) => m.lines).filter((l) => l.date >= range.start && l.date <= range.end);
       let photos = 0, last = 0;
       const senders = {}, captions = [];
@@ -2921,7 +2943,7 @@ function WhatsAppTab({ productionList }) {
         (dd.captions || []).forEach((c) => captions.push(c));
       });
       captions.sort((a, b) => a.ms - b.ms);
-      const reports = captions.map((c) => { const rep = waParseCaption(c.text); return { ...c, rep, ...waMatchReport(rep, lines) }; });
+      const reports = captions.map((c) => { const rep = waParseCaption(c.text); return { ...c, rep, ...(matched.length ? waMatchReport(rep, lines) : { status: 'NOMAP' }) }; });
       const count = (s) => reports.filter((r) => r.status === s).length;
       const miss = count('MISSING'), check = count('CHECK');
       let state = 'NONE';
@@ -2931,9 +2953,9 @@ function WhatsAppTab({ productionList }) {
         else state = lines.length ? 'OK' : 'MISSING'; // fotos sem legenda: só dá pra saber se há alguma produção lançada no período
       }
       const who = Object.entries(senders).sort((a, b) => b[1] - a[1]).slice(0, 3).map(([n, c]) => `${n} (${c})`).join(', ');
-      return { id, name, photos, state, matched, launched: lines.length, who, last, reports, miss, check };
+      return { id, name, ov, photos, state, matched, launched: lines.length, who, last, reports, miss, check };
     });
-  }, [groupsData, activity, mapInfo, days, range.start, range.end]);
+  }, [groupsData, activity, mapInfo, mapOverrides, days, range.start, range.end]);
 
   const order = { MISSING: 0, CHECK: 1, NOMAP: 2, OK: 3, NONE: 4 };
   const visible = rows
@@ -2957,6 +2979,7 @@ function WhatsAppTab({ productionList }) {
     CHECK: pill('CONFERIR SPLICE/TIPO', C.amber, C.amberSoft),
     MISSING: pill('NÃO LANÇADO', C.red, C.redSoft),
     NONUM: pill('LEGENDA SEM NÚMERO', C.textDim, 'transparent'),
+    NOMAP: pill('DEFINA O MAPA', C.amber, C.amberSoft),
   }[r.status]);
 
   const card = { background: C.panel, border: `1px solid ${C.border2}`, borderRadius: 8, padding: 16, marginBottom: 14 };
@@ -3029,6 +3052,7 @@ function WhatsAppTab({ productionList }) {
       {monitored.size > 0 && st === 'open' && tracked.length > 0 && tracked.every((r) => r.photos === 0) && <div style={{ color: C.amber, fontSize: 12, marginBottom: 10 }}>Nenhuma foto contada nesse período ainda. Clique em <b>Escanear Agora</b> para atualizar. Se continuar vazio, o WhatsApp pode não ter enviado histórico desses grupos — use "Reconectar do zero" para pedir de novo, ou navegue para outra semana.</div>}
       {monitored.size === 0 && rows.length > 0 && <div style={{ color: C.amber, fontSize: 12, marginBottom: 10 }}>Nenhum grupo marcado ainda — marque abaixo os grupos que devem ser acompanhados. Só a partir daí as fotos começam a ser contadas.</div>}
 
+      <datalist id="wa-map-names">{mapInfo.map((m) => <option key={m.key} value={m.name} />)}</datalist>
       <div style={{ ...card, padding: 0, overflowX: 'auto' }}>
         <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11 }}>
           <thead>
@@ -3044,7 +3068,19 @@ function WhatsAppTab({ productionList }) {
                   <td style={{ ...tdStyleDrive, cursor: r.reports.length ? 'pointer' : 'default' }} onClick={() => r.reports.length && setOpenId(openId === r.id ? null : r.id)}>
                     <strong>{r.name}</strong>{r.reports.length ? <span style={{ color: C.accent, fontSize: 10 }}> {openId === r.id ? '▲' : '▼ ver pontos'}</span> : null}
                   </td>
-                  <td style={{ ...tdStyleDrive, color: C.textDim }}>{r.matched.length ? r.matched.slice(0, 2).map((m) => m.name).join(', ') : '—'}</td>
+                  <td style={{ ...tdStyleDrive, color: C.textDim }}>
+                    {editId === r.id ? (
+                      <Input list="wa-map-names" autoFocus placeholder="nome do mapa (vazio = automático)" value={editText}
+                        onChange={(e) => setEditText(e.target.value)}
+                        onKeyDown={(e) => { if (e.key === 'Enter') saveMapName(r.id, editText); if (e.key === 'Escape') setEditId(null); }}
+                        onBlur={() => saveMapName(r.id, editText)} style={{ width: 230 }} />
+                    ) : (
+                      <span onClick={() => { setEditId(r.id); setEditText(r.ov || ''); }} style={{ cursor: 'pointer' }} title="Clique para definir o nome certo do mapa na produção">
+                        {r.matched.length ? r.matched.slice(0, 2).map((m) => m.name).join(', ') : (r.ov ? <span style={{ color: C.amber }}>{r.ov} (não encontrado)</span> : '—')}
+                        <span style={{ color: r.ov ? C.green : C.accent, fontSize: 10 }}> ✎</span>
+                      </span>
+                    )}
+                  </td>
                   <td style={{ ...tdStyleDrive, color: r.photos ? C.green : C.textDim, fontWeight: 700 }}>{r.photos}</td>
                   <td style={tdStyleDrive}>{r.reports.length || '—'}</td>
                   <td style={{ ...tdStyleDrive, color: C.textDim }}>{r.who || '—'}</td>
