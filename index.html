@@ -2797,13 +2797,14 @@ function waParseCaption(text) {
   let locNum = '';
   const tok = raw.match(/\b(?:FT|SE|S)\s*[-#:.]?\s*0*(\d{1,4})\b/i);
   if (tok) locNum = String(Number(tok[1]));
+  if (!locNum) { const g = raw.match(/fg\d{2,3}(0\d{3})\b/i); if (g) locNum = String(Number(g[1])); } // mapa + ponto colados
   if (!locNum) {
     const cleaned = raw.replace(/splices?\s*[:#-]?\s*\d+/ig, ' ').replace(/\d+\s*splices?/ig, ' ').replace(/\bFG\s*\d+[A-Z]*\b/ig, ' ').replace(/\b(C3|NC|AL)\b/ig, ' ');
     const n = cleaned.match(/\d+/);
     locNum = n ? String(Number(n[0])) : '';
   }
   const type = /\b(tail|end)\b/i.test(raw) ? 'END' : (/\bring\b/i.test(raw) ? 'RING CUT' : '');
-  return { loc: locNum, splice: sp ? Number(sp[1]) : null, type };
+  return { loc: locNum, splice: sp ? Number(sp[1]) : null, type, light: /light\s*levels?/i.test(raw) };
 }
 
 // Procura, nas linhas de produção do mapa, o ponto reportado na legenda — considerando também a DATA
@@ -2813,7 +2814,7 @@ function waParseCaption(text) {
 function waMatchReport(rep, lines, dayIso) {
   if (!rep.loc) return { status: 'NONUM' };
   const cands = lines.filter((l) => l.nums.includes(rep.loc));
-  if (!cands.length) return { status: 'MISSING' };
+  if (!cands.length) return { status: rep.light ? 'LIGHT' : 'MISSING' }; // light level = foto de teste, não conta como produção faltando
   const diff = (l) => (!dayIso || !l.date) ? 0 : Math.abs((new Date(`${l.date}T12:00:00`) - new Date(`${dayIso}T12:00:00`)) / 86400000);
   const near = (l) => (diff(l) <= 1 ? 1 : 0);
   const same = (l) => ((rep.splice == null || Number(l.splice) === rep.splice) && (!rep.type || String(l.typeEnd || '').toUpperCase() === rep.type)) ? 1 : 0;
@@ -3032,6 +3033,7 @@ function WhatsAppTab({ productionList }) {
     MISSING: pill('NÃO LANÇADO', C.red, C.redSoft),
     NONUM: pill('LEGENDA SEM NÚMERO', C.textDim, 'transparent'),
     NOMAP: pill('DEFINA O MAPA', C.amber, C.amberSoft),
+    LIGHT: pill('LIGHT LEVEL', C.textDim, 'transparent'),
   }[r.status]);
 
   const card = { background: C.panel, border: `1px solid ${C.border2}`, borderRadius: 8, padding: 16, marginBottom: 14 };
